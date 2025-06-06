@@ -30,7 +30,7 @@ app 里面已经集成了网络请求库`Fuel` 以及HTML解析器 `Jsoup`， �
 ### 第四步：打包 jar 文件
 
 1. 在`gradle.properties`里面修改`MY_SOURCES_PACKAGE=sources_by_xxx`
-1. 打开命令行，在项目根目录输入: `./gradlew jar`。 windows 平台：`gradlew.bat jar` 或者 `.\gradlew.bat jar`。不喜欢命令行的同学可以直接在IDEA右方找到Gradle->CustomSources->build->jar 双击。
+1. 打开命令行，在项目根目录输入: `./gradlew jar`。 windows 平台：`gradlew.bat jar` 或者 `.\gradlew.bat jar`。不喜欢命令行的同学可以直接在IDEA右方找到Gradle->CustomSources->build->jar 双击。Linux平台若报错需添加运行权限：`chmod +x dx/d8`。
 1. 此时在项目目录/build/libs/ 里面出现 CustomSources-1.0-SNAPSHOT.jar。并生成 `sources_by_xxx.jar`, windows 系统还会生成一个 upload.bat 文件。
 
 ![jar](art/jar.png)
