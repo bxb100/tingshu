@@ -1,5 +1,6 @@
 package com.github.eprendre.tingshu.sources
 
+import com.github.eprendre.tingshu.extensions.getMobileUA
 import com.github.eprendre.tingshu.utils.Book
 import com.github.eprendre.tingshu.utils.BookDetail
 import com.github.eprendre.tingshu.utils.Category
@@ -212,4 +213,32 @@ interface ILrc {
      * @return 返回歌词内容String
      */
     fun downloadLrc(url: String): String
+}
+
+/**
+ * 搜索验证接口，搜索的时候如果碰到需要验证的网站，会跳出验证页面
+ * 2.5.7加入
+ */
+interface ISearchVerification {
+
+    /**
+     * @return 返回搜索验证地址
+     */
+    fun getSearchVerificationUrl(keywords: String): String
+
+    /**
+     * 如果有办法根据cookies判断搜索是否已验证可以提高效率，没办法判断就返回false
+     */
+    fun isSearchValidated(): Boolean = false
+
+    /**
+     * 返回搜索验证页需要加载的UA
+     */
+    fun getSearchVerificationUA(): String = getMobileUA()
+
+    /**
+     * 有的网站有搜索时间限制，防止验证返回后和立即搜索的冲突，需要加一个时间延迟
+     * @return 延迟搜索时间，单位毫秒
+     */
+    fun getSearchDelayMs(): Long = 0
 }
