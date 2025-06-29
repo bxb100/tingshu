@@ -2,6 +2,8 @@ package com.github.eprendre.sources_by_bxb100
 
 import com.github.eprendre.tingshu.extensions.extractorAsyncExecute
 import com.github.eprendre.tingshu.extensions.getCookie
+import com.github.eprendre.tingshu.extensions.notifyLoadingEpisodes
+import com.github.eprendre.tingshu.extensions.showToast
 import com.github.eprendre.tingshu.sources.*
 import com.github.eprendre.tingshu.utils.*
 import com.github.kittinunf.fuel.Fuel
@@ -9,6 +11,7 @@ import com.github.kittinunf.fuel.httpGet
 import com.github.kittinunf.fuel.json.responseJson
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.random.Random
 
 object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
     const val UA =
@@ -22,16 +25,14 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
     override fun getUrl(): String = ORIGIN
     override fun getDesc(): String {
         return """
-夸克网盘听书源，提供夸克网盘的有声书资源。
-目录结构为 `/有声书/分类/小说`
-🚨目前只支持音频
+分类必须放在 [有声书] 目录下
+目录结构: [有声书/分类名/书名_作者_播音]
+🚨小说图片需要与小说同名, 同目录
         """.trimIndent()
     }
 
     override fun isMultipleEpisodePages(): Boolean = true
     override fun isSearchable(): Boolean = false
-    override fun isCacheable(): Boolean = false
-    override fun isWebViewNotRequired(): Boolean = true
 
     override fun search(
         keywords: String, page: Int
@@ -80,14 +81,18 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         val files = res.data.filter {
             it.dir
         }.map { file ->
+            // 和网盘的配置一致: `书名_作者_播音`
+            val infos = file.fileName.split("_")
+
             Book(
                 bookUrl = file.fid,
-                title = file.fileName,
+                title = infos.getOrNull(0) ?: "",
                 coverUrl = imgMap[file.fileName] ?: "",
-                author = "",
-                artist = "",
+                author = infos.getOrNull(1) ?: "",
+                artist = infos.getOrNull(2) ?: "",
             ).apply {
-                this.intro = "文件大小: ${file.size} 字节"
+                this.sourceId = getSourceId()
+//                this.intro = "文件大小: ${file.size} 字节"
                 this.episodesUpdateTime = file.updatedAt
                 this.isTransientEpisodes = false
             }
@@ -104,33 +109,37 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         )
     }
 
+    private val _pageList = ArrayList<Int>()
+
+    override fun reset() = run {
+        _pageList.clear()
+    }
+
     override fun getBookDetailInfo(
         bookUrl: String, loadEpisodes: Boolean, loadFullPages: Boolean
     ): BookDetail {
-        val episodes: List<Episode> = when {
-            loadEpisodes && !loadFullPages -> {
-                //                只加载第一页
-                getFilesByPairFid(bookUrl, 1, 10).data
-            }
+        val episodes = mutableListOf<Episode>()
 
-            loadEpisodes && loadFullPages -> {
-                //                遍历所有页的章节
-                getAllFilesByFid(bookUrl)
-            }
+        _pageList.clear()
+        if (loadEpisodes) {
+            val res = getFilesByPairFid(bookUrl, 1)
+            episodes.addAll(res.mapToEpisodes())
+            val totalPage = (res.metadata.total - 1) / res.metadata.size + 1
 
-            else -> {
-                emptyList()
+            if (loadFullPages) {
+                _pageList.addAll(2..totalPage)
+                while (_pageList.isNotEmpty()) {
+                    val page = _pageList.removeFirst()
+                    notifyLoadingEpisodes("$page / $totalPage")
+
+                    val res = getFilesByPairFid(bookUrl, page)
+                    episodes.addAll(res.mapToEpisodes())
+
+                    Thread.sleep(Random.nextLong(100, 500))
+                }
+                notifyLoadingEpisodes(null)
             }
         }
-            .filter {
-                it.file && it.formatType.startsWith("audio")
-            }
-            .map {
-                Episode(
-                    title = it.fileName,
-                    url = it.fid
-                )
-            }
 
         return BookDetail(
             episodes
@@ -160,7 +169,7 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         val cookie = getCookie(ORIGIN) ?: ""
 
         check(cookie.isNotBlank()) {
-            "请先在夸克浏览器中登录账号，并访问 ${ORIGIN}，然后在设置中获取 Cookie"
+            showToast("请先去登录夸克网盘")
         }
 
         return mapOf(
@@ -213,16 +222,40 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         }
     }
 
-    fun getDownloadUrls(vararg fid: String): List<Triple<String, String, String>> {
+    fun getDownloadUrls(
+        vararg fid: String,
+        repeat: Boolean = false
+    ): List<Triple<String, String, String>> {
         val url = "${BASE_URL}/1/clouddrive/file/download?pr=ucpro&fr=pc"
         val json = JSONObject().put("fids", JSONArray(fid.toList())).toString()
 
-        return Fuel
+        val result = Fuel
             .post(url)
             .header(buildRequestHeaders())
             .header("Content-Length" to json.toByteArray().size)
             .body(json)
-            .responseJson().third.get().obj().let { res ->
+            .responseJson()
+
+        when (result.second.statusCode) {
+//          https://github.com/chenqimiao/quarkdrive-webdav/blob/c68176a6b359ea6da6be1cab68e7e22fed5c25bc/src/drive/mod.rs#L148
+            408, 429, 500, 502, 503, 504 -> {
+                Thread.sleep(1000)
+                // repeat 1 time
+                return if (repeat) {
+                    emptyList()
+                } else {
+                    getDownloadUrls(*fid, repeat = true)
+                }
+            }
+
+            204 -> {
+                return emptyList()
+            }
+        }
+
+        return result
+            .third
+            .get().obj().let { res ->
                 res.getJSONArray("data").let {
                     (0 until it.length()).map { i ->
                         Triple(
@@ -234,69 +267,81 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
                 }
             }
     }
+}
 
-    data class QuarkFile(
-        val fid: String,
-        val fileName: String,
-        val pdirFid: String,
-        val size: Long,
-        val formatType: String,
-        val status: Int,
-        val createdAt: Long,
-        val updatedAt: Long,
-        val dir: Boolean,
-        val file: Boolean,
-        val previewUrl: String
-    ) {
-        companion object {
-            fun fromJson(obj: JSONObject): QuarkFile {
-                return QuarkFile(
-                    fid = obj.getString("fid"),
-                    fileName = obj.getString("file_name"),
-                    pdirFid = obj.getString("pdir_fid"),
-                    size = obj.getLong("size"),
-                    formatType = obj.getString("format_type"),
-                    status = obj.getInt("status"),
-                    createdAt = obj.getLong("created_at"),
-                    updatedAt = obj.getLong("updated_at"),
-                    dir = obj.getBoolean("dir"),
-                    file = obj.getBoolean("file"),
-                    previewUrl = obj.optString("preview_url")
-                )
-            }
+data class QuarkFile(
+    val fid: String,
+    val fileName: String,
+    val pdirFid: String,
+    val size: Long,
+    val formatType: String,
+    val status: Int,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val dir: Boolean,
+    val file: Boolean,
+    val previewUrl: String
+) {
+    companion object {
+        fun fromJson(obj: JSONObject): QuarkFile {
+            return QuarkFile(
+                fid = obj.getString("fid"),
+                fileName = obj.getString("file_name"),
+                pdirFid = obj.getString("pdir_fid"),
+                size = obj.getLong("size"),
+                formatType = obj.getString("format_type"),
+                status = obj.getInt("status"),
+                createdAt = obj.getLong("created_at"),
+                updatedAt = obj.getLong("updated_at"),
+                dir = obj.getBoolean("dir"),
+                file = obj.getBoolean("file"),
+                previewUrl = obj.optString("preview_url")
+            )
         }
     }
+}
 
-    data class Metadata(
-        val size: Int, val page: Int, val total: Int, val count: Int
-    ) {
-        companion object {
-            fun fromJson(obj: JSONObject): Metadata {
-                return Metadata(
-                    size = obj.getInt("_size"),
-                    page = obj.getInt("_page"),
-                    total = obj.getInt("_total"),
-                    count = obj.getInt("_count")
-                )
-            }
+data class Metadata(
+    val size: Int, val page: Int, val total: Int, val count: Int
+) {
+    companion object {
+        fun fromJson(obj: JSONObject): Metadata {
+            return Metadata(
+                size = obj.getInt("_size"),
+                page = obj.getInt("_page"),
+                total = obj.getInt("_total"),
+                count = obj.getInt("_count")
+            )
         }
     }
+}
 
-    data class ResponseData(
-        val data: List<QuarkFile>, val metadata: Metadata
-    ) {
-        companion object {
-            fun fromJson(obj: JSONObject): ResponseData {
-                val files = obj.getJSONObject("data").getJSONArray("list").let {
-                    (0 until it.length()).map { i ->
-                        QuarkFile.fromJson(it.getJSONObject(i))
-                    }
+data class ResponseData(
+    val data: List<QuarkFile>, val metadata: Metadata
+) {
+    companion object {
+        fun fromJson(obj: JSONObject): ResponseData {
+            val files = obj.getJSONObject("data").getJSONArray("list").let {
+                (0 until it.length()).map { i ->
+                    QuarkFile.fromJson(it.getJSONObject(i))
                 }
-                val metadata = Metadata.fromJson(obj.getJSONObject("metadata"))
-                return ResponseData(files, metadata)
             }
+            val metadata = Metadata.fromJson(obj.getJSONObject("metadata"))
+            return ResponseData(files, metadata)
         }
     }
+}
+
+private fun ResponseData.mapToEpisodes(): List<Episode> = run {
+    data.filter { it.file && it.formatType.startsWith("audio") }
+        .map { file ->
+            Episode(
+                title = file.fileName,
+                url = file.fid
+            ).apply {
+                this.coverUrl = file.previewUrl
+            }
+        }
 }
 
 object QuarkAudioUrlExtractor : AudioUrlExtractor {
