@@ -35,3 +35,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: CustomSources/build/libs/sources_by_bxb100.jar
+          tag_name: latest
