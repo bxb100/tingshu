@@ -1,0 +1,36 @@
+name: publish.yml
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish-workflow
+      cancel-in-progress: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '18'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Jar
+        run: ./gradlew jar
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: CustomSources/build/libs/sources_by_bxb100.jar
