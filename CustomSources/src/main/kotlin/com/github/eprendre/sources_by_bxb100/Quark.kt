@@ -1,7 +1,8 @@
 package com.github.eprendre.sources_by_bxb100
 
-import com.github.eprendre.tingshu.extensions.extractorAsyncExecute
+import com.github.eprendre.sources_by_bxb100.Quark.getSourceId
 import com.github.eprendre.tingshu.extensions.getCookie
+import com.github.eprendre.tingshu.extensions.getSourceCacheDir
 import com.github.eprendre.tingshu.extensions.notifyLoadingEpisodes
 import com.github.eprendre.tingshu.extensions.showToast
 import com.github.eprendre.tingshu.sources.*
@@ -11,6 +12,7 @@ import com.github.kittinunf.fuel.httpGet
 import com.github.kittinunf.fuel.json.responseJson
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import kotlin.random.Random
 
 object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
@@ -27,7 +29,6 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         return """
 分类必须放在 [有声书] 目录下
 目录结构: [有声书/分类名/书名_作者_播音]
-🚨小说图片需要与小说同名, 同目录
         """.trimIndent()
     }
 
@@ -72,6 +73,7 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         val currentPage = res.metadata.page
         val totalPage = (res.metadata.total - 1) / res.metadata.size + 1
 
+        // TODO: 目前使用 getBookDetailInfo 获取目录内图片, 那这里的逻辑可以删除了
         val imgMap: Map<String, String> = res.data.filter {
             it.file && it.formatType.startsWith("image")
         }.associate {
@@ -84,10 +86,12 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
             // 和网盘的配置一致: `书名_作者_播音`
             val infos = file.fileName.split("_")
 
+            val localCacheCover = getPotentialLocalCoverFile(file.fid).second
+
             Book(
                 bookUrl = file.fid,
                 title = infos.getOrNull(0) ?: "",
-                coverUrl = imgMap[file.fileName] ?: "",
+                coverUrl = localCacheCover ?: imgMap[file.fileName] ?: "",
                 author = infos.getOrNull(1) ?: "",
                 artist = infos.getOrNull(2) ?: "",
             ).apply {
@@ -119,6 +123,7 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         bookUrl: String, loadEpisodes: Boolean, loadFullPages: Boolean
     ): BookDetail {
         val episodes = mutableListOf<Episode>()
+        var coverUrl: String? = ""
 
         _pageList.clear()
         if (loadEpisodes) {
@@ -139,14 +144,40 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
                 }
                 notifyLoadingEpisodes(null)
             }
+        } else {
+            val localCover = getPotentialLocalCoverFile(bookUrl)
+
+            coverUrl = if (localCover.second != null) {
+                localCover.second
+            } else {
+                val imageUrl =
+                    getFilesByPairFid(bookUrl, cat = "image").data.firstOrNull()?.previewUrl
+                imageUrl?.let {
+                    var path = imageUrl
+                    Fuel.download(imageUrl)
+                        .fileDestination { _, _ ->
+                            val f = File(localCover.first, bookUrl)
+                            path = "file://${f.absolutePath}"
+                            f
+                        }
+                        .response()
+                    path
+                }
+            }
         }
 
         return BookDetail(
-            episodes
+            episodes,
+            coverUrl = coverUrl ?: "",
         )
     }
 
-    override fun getAudioUrlExtractor(): AudioUrlExtractor = QuarkAudioUrlExtractor
+    override fun getAudioUrlExtractor(): AudioUrlExtractor {
+        AudioUrlCustomExtractor.setUp {
+            getDownloadUrls(it).first().third
+        }
+        return AudioUrlCustomExtractor
+    }
 
     /**
      * 目前好像只能 web 登录, 没找到插件直接配置 cookie 的方式
@@ -209,13 +240,27 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
     }
 
     fun getFilesByPairFidUrl(
-        fid: String = "0", page: Int = 1, size: Int = 50
+        fid: String = "0",
+        page: Int = 1,
+        size: Int = 50,
+        // oblivion 提供的思路, 可以添加 `cat=image` 筛选图片
+        cat: String? = null
     ): String {
-        return "${BASE_URL}/1/clouddrive/file/sort?pdir_fid=${fid}&_page=${page}&_size=${size}&pr=ucpro&fr=pc&_fetch_total=1&_fetch_sub_dirs=0&_sort=file_type:asc,file_name:asc"
+        var url =
+            "${BASE_URL}/1/clouddrive/file/sort?pdir_fid=${fid}&_page=${page}&_size=${size}&pr=ucpro&fr=pc&_fetch_total=1&_fetch_sub_dirs=0&_sort=file_type:asc,file_name:asc"
+        if (cat != null) {
+            url += "&cat=${cat}"
+        }
+        return url
     }
 
-    fun getFilesByPairFid(fid: String = "0", page: Int = 1, size: Int = 50): ResponseData {
-        val url = getFilesByPairFidUrl(fid, page, size)
+    fun getFilesByPairFid(
+        fid: String = "0",
+        page: Int = 1,
+        size: Int = 50,
+        cat: String? = null
+    ): ResponseData {
+        val url = getFilesByPairFidUrl(fid, page, size, cat)
 
         return url.httpGet().header(buildRequestHeaders()).responseJson().third.get().obj().let {
             ResponseData.fromJson(it)
@@ -344,26 +389,14 @@ private fun ResponseData.mapToEpisodes(): List<Episode> = run {
         }
 }
 
-object QuarkAudioUrlExtractor : AudioUrlExtractor {
+private fun getPotentialLocalCoverFile(bookFid: String): Pair<File, String?> {
+    val coverCacheDir = getSourceCacheDir(getSourceId(), "quark_cover")
 
-    override fun extract(
-        url: String,
-        autoPlay: Boolean,
-        isCache: Boolean,
-        isDebug: Boolean
-    ) {
-        extractorAsyncExecute(
-            url,
-            autoPlay,
-            isCache,
-            isDebug,
-            {
-                Quark.getDownloadUrls(url).first().third
-            },
-        ) {
-            AudioUrlDirectExtractor.extract(
-                it, autoPlay, isCache, isDebug
-            )
+    File(coverCacheDir, bookFid).let {
+        return if (it.exists()) {
+            Pair(coverCacheDir, "file://${it.absolutePath}")
+        } else {
+            Pair(coverCacheDir, null)
         }
     }
 }
