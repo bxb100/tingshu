@@ -13,6 +13,7 @@ import com.github.kittinunf.fuel.json.responseJson
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.net.URL
 import kotlin.random.Random
 
 object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
@@ -34,6 +35,7 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
 
     override fun isMultipleEpisodePages(): Boolean = true
     override fun isSearchable(): Boolean = false
+    override fun isCacheable(): Boolean = false
 
     override fun search(
         keywords: String, page: Int
@@ -99,6 +101,7 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
 //                this.intro = "文件大小: ${file.size} 字节"
                 this.episodesUpdateTime = file.updatedAt
                 this.isTransientEpisodes = false
+                this.isCompleted = file.fileName.contains(Regex("已完结|完结|完本|全集|全本"))
             }
         }
 
@@ -190,10 +193,14 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
      * 获取音频链接时需要登录的 cookie
      */
     override fun headers(audioUrl: String): Map<String, String> {
-        val cookie = getCookie(ORIGIN) ?: ""
-        return mapOf(
-            "Cookie" to cookie,
-        )
+        return if (audioUrl.contains("quark.cn")) {
+            mapOf(
+                *buildRequestHeaders().toList().toTypedArray(),
+                "Host" to URL(audioUrl).host,
+            )
+        } else {
+            emptyMap()
+        }
     }
 
     fun buildRequestHeaders(): Map<String, String> {
@@ -284,6 +291,7 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         when (result.second.statusCode) {
 //          https://github.com/chenqimiao/quarkdrive-webdav/blob/c68176a6b359ea6da6be1cab68e7e22fed5c25bc/src/drive/mod.rs#L148
             408, 429, 500, 502, 503, 504 -> {
+                showToast("获取下载链接失败, 正在重试")
                 Thread.sleep(1000)
                 // repeat 1 time
                 return if (repeat) {
