@@ -386,7 +386,11 @@ data class ResponseData(
 }
 
 private fun ResponseData.mapToEpisodes(): List<Episode> = run {
-    data.filter { it.file && it.formatType.startsWith("audio") }
+    data.filter { it.file }
+        .filter {
+            // 过滤掉非音频文件
+            it.formatType.startsWith("audio") || it.formatType.startsWith("video")
+        }
         .map { file ->
             Episode(
                 title = file.fileName,
