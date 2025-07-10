@@ -1,5 +1,6 @@
 package com.github.eprendre.sources_by_bxb100
 
+import android.webkit.CookieManager
 import com.github.eprendre.sources_by_bxb100.Quark.getSourceId
 import com.github.eprendre.tingshu.extensions.getCookie
 import com.github.eprendre.tingshu.extensions.getSourceCacheDir
@@ -8,12 +9,13 @@ import com.github.eprendre.tingshu.extensions.showToast
 import com.github.eprendre.tingshu.sources.*
 import com.github.eprendre.tingshu.utils.*
 import com.github.kittinunf.fuel.Fuel
-import com.github.kittinunf.fuel.httpGet
+import com.github.kittinunf.fuel.core.FuelManager
+import com.github.kittinunf.fuel.core.Headers
+import com.github.kittinunf.fuel.core.Request
 import com.github.kittinunf.fuel.json.responseJson
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.net.URL
 import kotlin.random.Random
 
 object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
@@ -22,6 +24,43 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
     const val ORIGIN = "https://pan.quark.cn"
     const val REFERER = "https://pan.quark.cn/"
     const val BASE_URL = "https://drive.quark.cn"
+
+    val manager: FuelManager = FuelManager()
+    private val webviewCookieManager: CookieManager = CookieManager.getInstance()
+
+    init {
+        manager.apply {
+            baseHeaders = mapOf(
+                "User-Agent" to UA,
+                "Accept" to "application/json, text/plain, */*",
+                "Referer" to REFERER
+            )
+        }
+        // fix https://github.com/AlistGo/alist/issues/830
+        manager
+            .addResponseInterceptor { next ->
+                { req, res ->
+                    res.headers[Headers.SET_COOKIE].forEach {
+                        webviewCookieManager.setCookie(res.url.toString(), it)
+                    }
+
+                    next(req, res)
+                }
+            }
+            .addRequestInterceptor { next: (Request) -> Request ->
+                { r: Request ->
+                    val cookie = getCookie(ORIGIN) ?: ""
+
+                    check(cookie.isNotBlank()) {
+                        showToast("请先去登录夸克网盘")
+                    }
+
+                    r.header(Headers.COOKIE, cookie)
+                    next(r)
+                }
+            }
+
+    }
 
     override fun getSourceId(): String = "31ed2bc9fb544c17912ef2e7e9b2898e"
     override fun getName(): String = "夸克网盘听书源"
@@ -48,14 +87,17 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         val categories = getAllFilesByFid("0").find {
             it.fileName == "有声书" && it.dir
         }?.let { rootDir ->
-            // 作为分类目录
-            getAllFilesByFid(rootDir.fid)
-        }
-        return listOf(CategoryMenu("有声书", categories?.map {
+            // 二级分类目录
+            getAllFilesByFid(rootDir.fid).filter {
+                it.dir
+            }
+        } ?: emptyList()
+
+        return listOf(CategoryMenu("有声书", categories.map {
             CategoryTab(
                 it.fileName, it.fid
             )
-        } ?: emptyList()))
+        }))
     }
 
     override fun getCategoryList(url: String): Category {
@@ -67,7 +109,7 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         }
 
         val res =
-            currentUrl.httpGet().header(buildRequestHeaders()).responseJson().third.get().obj()
+            manager.get(currentUrl).responseJson().third.get().obj()
                 .let {
                     ResponseData.fromJson(it)
                 }
@@ -75,25 +117,18 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         val currentPage = res.metadata.page
         val totalPage = (res.metadata.total - 1) / res.metadata.size + 1
 
-        // TODO: 目前使用 getBookDetailInfo 获取目录内图片, 那这里的逻辑可以删除了
-        val imgMap: Map<String, String> = res.data.filter {
-            it.file && it.formatType.startsWith("image")
-        }.associate {
-            it.fileName.substringBeforeLast(".") to it.previewUrl
-        }
-
         val files = res.data.filter {
             it.dir
         }.map { file ->
             // 和网盘的配置一致: `书名_作者_播音`
             val infos = file.fileName.split("_")
 
-            val localCacheCover = getPotentialLocalCoverFile(file.fid).second
+            val cachedCover = getLocalCache(file.fid).second
 
             Book(
                 bookUrl = file.fid,
                 title = infos.getOrNull(0) ?: "",
-                coverUrl = localCacheCover ?: imgMap[file.fileName] ?: "",
+                coverUrl = cachedCover ?: "",
                 author = infos.getOrNull(1) ?: "",
                 artist = infos.getOrNull(2) ?: "",
             ).apply {
@@ -148,10 +183,10 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
                 notifyLoadingEpisodes(null)
             }
         } else {
-            val localCover = getPotentialLocalCoverFile(bookUrl)
+            val cachedCover = getLocalCache(bookUrl)
 
-            coverUrl = if (localCover.second != null) {
-                localCover.second
+            coverUrl = if (cachedCover.second != null) {
+                cachedCover.second
             } else {
                 val imageUrl =
                     getFilesByPairFid(bookUrl, cat = "image").data.firstOrNull()?.previewUrl
@@ -159,7 +194,7 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
                     var path = imageUrl
                     Fuel.download(imageUrl)
                         .fileDestination { _, _ ->
-                            val f = File(localCover.first, bookUrl)
+                            val f = File(cachedCover.first, bookUrl)
                             path = "file://${f.absolutePath}"
                             f
                         }
@@ -194,29 +229,14 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
      */
     override fun headers(audioUrl: String): Map<String, String> {
         return if (audioUrl.contains("quark.cn")) {
+            val cookie = getCookie(ORIGIN) ?: ""
+
             mapOf(
-                *buildRequestHeaders().toList().toTypedArray(),
-                "Host" to URL(audioUrl).host,
+                Headers.COOKIE to cookie,
             )
         } else {
             emptyMap()
         }
-    }
-
-    fun buildRequestHeaders(): Map<String, String> {
-        val cookie = getCookie(ORIGIN) ?: ""
-
-        check(cookie.isNotBlank()) {
-            showToast("请先去登录夸克网盘")
-        }
-
-        return mapOf(
-            "Host" to "drive.quark.cn",
-            "User-Agent" to UA,
-            "Origin" to ORIGIN,
-            "Referer" to REFERER,
-            "Cookie" to cookie
-        )
     }
 
     fun getAllFilesByFid(fid: String): List<QuarkFile> {
@@ -269,7 +289,7 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
     ): ResponseData {
         val url = getFilesByPairFidUrl(fid, page, size, cat)
 
-        return url.httpGet().header(buildRequestHeaders()).responseJson().third.get().obj().let {
+        return manager.get(url).responseJson().third.get().obj().let {
             ResponseData.fromJson(it)
         }
     }
@@ -281,9 +301,8 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         val url = "${BASE_URL}/1/clouddrive/file/download?pr=ucpro&fr=pc"
         val json = JSONObject().put("fids", JSONArray(fid.toList())).toString()
 
-        val result = Fuel
+        val result = manager
             .post(url)
-            .header(buildRequestHeaders())
             .header("Content-Length" to json.toByteArray().size)
             .body(json)
             .responseJson()
@@ -401,8 +420,11 @@ private fun ResponseData.mapToEpisodes(): List<Episode> = run {
         }
 }
 
-private fun getPotentialLocalCoverFile(bookFid: String): Pair<File, String?> {
-    val coverCacheDir = getSourceCacheDir(getSourceId(), "quark_cover")
+private fun getLocalCache(
+    bookFid: String,
+    subDir: String = "quark_cover"
+): Pair<File, String?> {
+    val coverCacheDir = getSourceCacheDir(getSourceId(), subDir)
 
     File(coverCacheDir, bookFid).let {
         return if (it.exists()) {
