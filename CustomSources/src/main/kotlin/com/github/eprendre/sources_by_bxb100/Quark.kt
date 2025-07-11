@@ -26,7 +26,7 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
     const val BASE_URL = "https://drive.quark.cn"
 
     val manager: FuelManager = FuelManager()
-    private val webviewCookieManager: CookieManager = CookieManager.getInstance()
+    private val webviewCookieManager: CookieManager by lazy { CookieManager.getInstance() }
 
     init {
         manager.apply {
@@ -59,7 +59,6 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
                     next(r)
                 }
             }
-
     }
 
     override fun getSourceId(): String = "31ed2bc9fb544c17912ef2e7e9b2898e"
