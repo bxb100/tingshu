@@ -159,21 +159,21 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         var coverUrl: String? = ""
 
         if (loadEpisodes) {
-            val stack = ArrayDeque<String>()
-            stack.push(bookUrl)
+            val stack = ArrayDeque<Pair<String, String>>()
+            stack.push(Pair(bookUrl, "主目录"))
 
             while (stack.isNotEmpty()) {
-                val currentFid = stack.pop()
-                notifyLoadingEpisodes("正在加载目录: $currentFid")
+                val current = stack.pollLast()
+                notifyLoadingEpisodes("正在加载: ${current.second}")
                 // ~500 is an expedient number
-                // 500 https://github.com/bxb100/quarkdrive-webdav/blob/ef1ba50d714aa00a9ebbd9aa693ac6919ddaf956/src/cache.rs#L13
+                // 500 https://github.com/chenqimiao/quarkdrive-webdav/blob/ef1ba50d714aa00a9ebbd9aa693ac6919ddaf956/src/cache.rs#L13
                 // 100 https://github.com/AlistGo/alist/blob/9da56bab4d2cf646fa9f36b033a2e372a3a57bd1/drivers/quark_uc/util.go#L62
-                getAllFilesByFid(currentFid, 500).forEach {
+                getAllFilesByFid(current.first, 500).forEach {
                     if (it.isMedia()) {
                         episodes.add(it.toEpisode())
-                    } else if (it.dir && currentFid == bookUrl) {
+                    } else if (it.dir && current.first == bookUrl) {
                         // 只递归一层
-                        stack.add(it.fid)
+                        stack.push(Pair(it.fid, it.fileName))
                     }
                 }
             }
