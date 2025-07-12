@@ -16,6 +16,8 @@ import com.github.kittinunf.fuel.json.responseJson
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.Files
+import java.util.*
 import kotlin.random.Random
 
 object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
@@ -71,7 +73,7 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         """.trimIndent()
     }
 
-    override fun isMultipleEpisodePages(): Boolean = true
+    override fun isMultipleEpisodePages(): Boolean = false
     override fun isSearchable(): Boolean = false
     override fun isCacheable(): Boolean = false
 
@@ -150,37 +152,33 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         )
     }
 
-    private val _pageList = ArrayList<Int>()
-
-    override fun reset() = run {
-        _pageList.clear()
-    }
-
     override fun getBookDetailInfo(
         bookUrl: String, loadEpisodes: Boolean, loadFullPages: Boolean
     ): BookDetail {
         val episodes = mutableListOf<Episode>()
         var coverUrl: String? = ""
 
-        _pageList.clear()
         if (loadEpisodes) {
-            val res = getFilesByPairFid(bookUrl, 1)
-            episodes.addAll(res.mapToEpisodes())
-            val totalPage = (res.metadata.total - 1) / res.metadata.size + 1
+            val stack = ArrayDeque<String>()
+            stack.push(bookUrl)
 
-            if (loadFullPages) {
-                _pageList.addAll(2..totalPage)
-                while (_pageList.isNotEmpty()) {
-                    val page = _pageList.removeFirst()
-                    notifyLoadingEpisodes("$page / $totalPage")
+            while (stack.isNotEmpty()) {
+                val currentFid = stack.pop()
+                notifyLoadingEpisodes("正在加载目录: $currentFid")
 
-                    val res = getFilesByPairFid(bookUrl, page)
-                    episodes.addAll(res.mapToEpisodes())
-
-                    Thread.sleep(Random.nextLong(100, 500))
+                getAllFilesByFid(currentFid, 100).forEach {
+                    if (it.isMedia()) {
+                        episodes.add(it.toEpisode())
+                    } else if (it.dir && currentFid == bookUrl) {
+                        // 只递归一层
+                        stack.add(it.fid)
+                    }
                 }
-                notifyLoadingEpisodes(null)
+                Thread.sleep(Random.nextLong(300, 500))
             }
+
+            notifyLoadingEpisodes(null)
+
         } else {
             val cachedCover = getLocalCache(bookUrl)
 
@@ -204,7 +202,7 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         }
 
         return BookDetail(
-            episodes,
+            playList = episodes.sortedWith(EpisodeComparator()),
             coverUrl = coverUrl ?: "",
         )
     }
@@ -238,13 +236,12 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         }
     }
 
-    fun getAllFilesByFid(fid: String): List<QuarkFile> {
+    fun getAllFilesByFid(fid: String, size: Int = 50): List<QuarkFile> {
 
         // todo 加个缓存
         val files = mutableListOf<QuarkFile>()
 
         var page = 1
-        val size = 50
         var count = 0
         var total = Int.MAX_VALUE
 
@@ -370,6 +367,10 @@ data class QuarkFile(
             )
         }
     }
+
+    fun isMedia(): Boolean {
+        return file && (formatType.startsWith("audio") || formatType.startsWith("video"))
+    }
 }
 
 data class Metadata(
@@ -403,20 +404,13 @@ data class ResponseData(
     }
 }
 
-private fun ResponseData.mapToEpisodes(): List<Episode> = run {
-    data.filter { it.file }
-        .filter {
-            // 过滤掉非音频文件
-            it.formatType.startsWith("audio") || it.formatType.startsWith("video")
-        }
-        .map { file ->
-            Episode(
-                title = file.fileName,
-                url = file.fid
-            ).apply {
-                this.coverUrl = file.previewUrl
-            }
-        }
+private fun QuarkFile.toEpisode(): Episode {
+    return Episode(
+        title = fileName,
+        url = fid
+    ).apply {
+        this.coverUrl = previewUrl
+    }
 }
 
 private fun getLocalCache(
@@ -427,9 +421,77 @@ private fun getLocalCache(
 
     File(coverCacheDir, bookFid).let {
         return if (it.exists()) {
-            Pair(coverCacheDir, "file://${it.absolutePath}")
+            if (Files.size(it.toPath()) == 0L) {
+                // when you quickly cancel Fuel download, it will create an empty file
+                it.delete()
+                Pair(coverCacheDir, null)
+            } else {
+                Pair(coverCacheDir, "file://${it.absolutePath}")
+            }
         } else {
             Pair(coverCacheDir, null)
         }
+    }
+}
+
+class EpisodeComparator : Comparator<Episode> {
+
+    private fun String.firstIsDigit(): Boolean {
+        return this.isNotBlank() && this[0].isDigit()
+    }
+
+    private fun getChunk(s: String, index: Int): String {
+        var marker = index
+        val chunk = StringBuilder()
+        var c = s[marker]
+        chunk.append(c)
+        marker++
+
+        val fillChunk = { condition: (Char) -> Boolean ->
+            {
+                while (++marker < s.length) {
+                    c = s[marker]
+                    if (condition(c)) break
+                    chunk.append(c)
+                }
+            }
+        }
+
+        if (c.isDigit()) {
+            fillChunk(Char::isDigit)
+        } else {
+            fillChunk {
+                !it.isDigit()
+            }
+        }
+        return chunk.toString()
+    }
+
+    override fun compare(e1: Episode, e2: Episode): Int {
+        val s1 = e1.title
+        val s2 = e2.title
+        var thisMarker = 0
+        var thatMarker = 0
+
+        while (thisMarker < s1.length && thatMarker < s2.length) {
+            val thisChunk = getChunk(s1, thisMarker)
+            thisMarker += thisChunk.length
+            val thatChunk = getChunk(s2, thatMarker)
+            thatMarker += thatChunk.length
+
+            val result = when {
+                thisChunk.firstIsDigit() && thatChunk.firstIsDigit() -> {
+                    // If both chunks contain numeric characters, sort them numerically
+                    thisChunk.toInt().compareTo(thatChunk.toInt())
+                }
+
+                else -> {
+                    // Sort them lexicographically
+                    thisChunk.compareTo(thatChunk)
+                }
+            }
+            if (result != 0) return result
+        }
+        return s1.length - s2.length
     }
 }
