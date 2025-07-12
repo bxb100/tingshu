@@ -165,8 +165,10 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
             while (stack.isNotEmpty()) {
                 val currentFid = stack.pop()
                 notifyLoadingEpisodes("正在加载目录: $currentFid")
-
-                getAllFilesByFid(currentFid, 100).forEach {
+                // ~500 is an expedient number
+                // 500 https://github.com/bxb100/quarkdrive-webdav/blob/ef1ba50d714aa00a9ebbd9aa693ac6919ddaf956/src/cache.rs#L13
+                // 100 https://github.com/AlistGo/alist/blob/9da56bab4d2cf646fa9f36b033a2e372a3a57bd1/drivers/quark_uc/util.go#L62
+                getAllFilesByFid(currentFid, 500).forEach {
                     if (it.isMedia()) {
                         episodes.add(it.toEpisode())
                     } else if (it.dir && currentFid == bookUrl) {
@@ -174,7 +176,6 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
                         stack.add(it.fid)
                     }
                 }
-                Thread.sleep(Random.nextLong(300, 500))
             }
 
             notifyLoadingEpisodes(null)
@@ -257,6 +258,7 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
             }
 
             page++
+            Thread.sleep(Random.nextLong(300, 500))
         }
 
         return files
