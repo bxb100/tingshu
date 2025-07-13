@@ -243,21 +243,18 @@ object Quark : TingShu(), ILogin, AudioUrlExtraHeaders {
         val files = mutableListOf<QuarkFile>()
 
         var page = 1
-        var count = 0
         var total = Int.MAX_VALUE
 
-        while ((page - 1) * size + count < total) {
-            val response = getFilesByPairFid(fid, page, size)
-            files.addAll(response.data)
-
-            count = response.metadata.count
-            total = response.metadata.total
-
-            if (files.size >= total) {
-                break
+        while (files.size < total) {
+            getFilesByPairFid(fid, page++, size).let {
+                if (it.data.isEmpty()) {
+                    // similar: break continue in inline lambda
+                    total = 0
+                } else {
+                    files.addAll(it.data)
+                    total = it.metadata.total
+                }
             }
-
-            page++
             Thread.sleep(Random.nextLong(300, 500))
         }
 
