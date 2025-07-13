@@ -447,7 +447,6 @@ class EpisodeComparator : Comparator<Episode> {
         val chunk = StringBuilder()
         var c = s[marker]
         chunk.append(c)
-        marker++
 
         val fillChunk = { condition: (Char) -> Boolean ->
             {
@@ -460,12 +459,11 @@ class EpisodeComparator : Comparator<Episode> {
         }
 
         if (c.isDigit()) {
-            fillChunk(Char::isDigit)
+            fillChunk { !it.isDigit() }
         } else {
-            fillChunk {
-                !it.isDigit()
-            }
-        }
+            fillChunk(Char::isDigit)
+        }()
+
         return chunk.toString()
     }
 
