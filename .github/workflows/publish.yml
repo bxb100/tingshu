@@ -36,3 +36,4 @@ jobs:
         with:
           files: CustomSources/build/libs/sources_by_bxb100.jar
           tag_name: latest
+          make_latest: true
