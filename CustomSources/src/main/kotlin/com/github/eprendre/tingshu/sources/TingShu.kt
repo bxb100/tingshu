@@ -5,6 +5,7 @@ import com.github.eprendre.tingshu.utils.Book
 import com.github.eprendre.tingshu.utils.BookDetail
 import com.github.eprendre.tingshu.utils.Category
 import com.github.eprendre.tingshu.utils.CategoryMenu
+import com.github.eprendre.tingshu.utils.ConfigItem
 import com.google.gson.Gson
 
 abstract class TingShu {
@@ -241,4 +242,24 @@ interface ISearchVerification {
      * @return 延迟搜索时间，单位毫秒
      */
     fun getSearchDelayMs(): Long = 0
+}
+
+/**
+ * 自定义源配置, 可在书源首页长按对应源打开设置页面。
+ * 2.5.9 加入
+ * App写入的key为 ${getSourceId()}.${configItem.key}
+ * 举例：
+ *     override fun getCustomConfigItems(): List<ConfigItem> {
+ *         return listOf(
+ *             ConfigItem.Text("text_test", "文本测试"),
+ *             ConfigItem.Switch("switch_test", "开关测试", false),
+ *             ConfigItem.Select("select_test", "单选测试", listOf("选项1", "选项2", "选项3"), "选项1"),
+ *             ConfigItem.MultiSelect("multiselect_test", "多选测试", listOf("选项1", "选项2", "选项3"), listOf("选项2")),
+ *         )
+ *     }
+ *
+ * 通过ExternalSourcePrefs.getString("${getSourceId()}.text_test")读取对应值
+ */
+interface ConfigurableSource {
+    fun getCustomConfigItems(): List<ConfigItem>
 }

@@ -102,3 +102,18 @@ data class Category(
     val currentUrl: String,
     val nextUrl: String
 )
+
+/**
+ * 2.5.9 加入，供自定义源配置文件使用, 可通过ExternalSourcePrefs.getString("${getSourceId()}.${configItem.key}")读取对应的值
+ * Switch 读取值为 "true" 或者 "false"
+ * MultiSelect 读取值为 "," 分隔的字符串，比如"1,2,3"
+ */
+sealed class ConfigItem(
+    val key: String,
+    val label: String
+) {
+    class Text(key: String, label: String, var default: String = "") : ConfigItem(key, label)
+    class Select(key: String, label: String, val options: List<String>, var default: String) : ConfigItem(key, label)
+    class Switch(key: String, label: String, var default: Boolean) : ConfigItem(key, label)
+    class MultiSelect(key: String, label: String, val options: List<String>, var default: List<String> = listOf()) : ConfigItem(key, label)
+}
